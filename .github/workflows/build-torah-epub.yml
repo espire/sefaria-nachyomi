@@ -21,12 +21,11 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('build_torah_remote.py')
-          s = p.read_text(encoding='utf-8')
+          p=Path('build_torah_remote.py')
+          s=p.read_text(encoding='utf-8')
 
-          # Add a Jewish-versification MAM loader plus exact character-offset alignment.
-          anchor = "def load_metsudah(book):"
-          insert = r'''def load_mam_ajf(book):
+          anchor="def load_metsudah(book):"
+          insert=r'''def load_mam_ajf(book):
               url = raw_url(MAM_REPO, MAM_REV, f'csv-ajf/{book}.csv')
               text = download_text(url)
               verses = {}
@@ -73,59 +72,40 @@ jobs:
               return ends[off]
 
           '''
-          # Remove indentation introduced by embedding in this workflow.
-          insert = '\n'.join(line[10:] if line.startswith('          ') else line for line in insert.splitlines())
-          if anchor not in s:
-              raise SystemExit('Could not find load_metsudah anchor')
-          s = s.replace(anchor, insert + '\n' + anchor, 1)
+          insert='\n'.join(line[10:] if line.startswith('          ') else line for line in insert.splitlines())
+          assert anchor in s
+          s=s.replace(anchor,insert+anchor,1)
 
-          old_sources = '''    he_books={}; en_books={}; br_books={}; en_licenses={}
-              for book,_ in BOOKS:
-                  he_books[book], br_books[book]=load_mam(book)
-                  en_books[book], en_licenses[book]=load_metsudah(book)
-                  if set(he_books[book]) != set(en_books[book]):
-                      missing_en=sorted(set(he_books[book])-set(en_books[book]))[:10]
-                      missing_he=sorted(set(en_books[book])-set(he_books[book]))[:10]
-                      raise RuntimeError(f'Verse mismatch {book}; missing EN {missing_en}; missing HE {missing_he}')'''
-          old_sources = '\n'.join(line[10:] if line.startswith('          ') else line for line in old_sources.splitlines())
-          new_sources = '''    he_books={}; en_books={}; br_books={}; en_licenses={}; alignments={}
-              for book,_ in BOOKS:
-                  he_books[book], br_books[book]=load_mam(book)
-                  en_books[book], en_licenses[book]=load_metsudah(book)
-                  if set(he_books[book]) != set(en_books[book]):
-                      missing_en=sorted(set(he_books[book])-set(en_books[book]))[:10]
-                      missing_he=sorted(set(en_books[book])-set(he_books[book]))[:10]
-                      raise RuntimeError(f'Verse mismatch {book}; missing EN {missing_en}; missing HE {missing_he}')
-                  ajf = load_mam_ajf(book)
-                  alignments[book] = make_alignment(book, he_books[book], ajf)'''
-          new_sources = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_sources.splitlines())
-          if old_sources not in s:
-              raise SystemExit('Could not patch source-loading block')
-          s = s.replace(old_sources, new_sources, 1)
+          old="    he_books={}; en_books={}; br_books={}; en_licenses={}"
+          assert old in s
+          s=s.replace(old,"    he_books={}; en_books={}; br_books={}; en_licenses={}; alignments={}",1)
 
-          old_bounds = '''        starts=[parse_ref(fk[str(i)][0]) for i in range(1,8)]
-              end=parse_ref(fk['7'][1])
-              start=starts[0]
-              m_rng=fk.get('M') or fk.get('m')
-              if not m_rng: raise RuntimeError(f'No Maftir for {name}')
-              maftir=parse_ref(m_rng[0])'''
-          old_bounds = '\n'.join(line[10:] if line.startswith('          ') else line for line in old_bounds.splitlines())
-          new_bounds = '''        ajf_starts=[parse_ref(fk[str(i)][0]) for i in range(1,8)]
-              starts=[map_ajf_start(book, r, alignments[book], f'{name} aliyah {i+1}') for i,r in enumerate(ajf_starts)]
-              ajf_end=parse_ref(fk['7'][1])
-              end=map_ajf_end(book, ajf_end, alignments[book], f'{name} seventh aliyah end')
-              start=starts[0]
-              m_rng=fk.get('M') or fk.get('m')
-              maftir=map_ajf_start(book, parse_ref(m_rng[0]), alignments[book], f'{name} Maftir') if m_rng else None'''
-          new_bounds = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_bounds.splitlines())
-          if old_bounds not in s:
-              raise SystemExit('Could not patch leyning-boundary block')
-          s = s.replace(old_bounds, new_bounds, 1)
+          needle="            raise RuntimeError(f'Verse mismatch {book}; missing EN {missing_en}; missing HE {missing_he}')"
+          assert needle in s
+          s=s.replace(needle, needle+"\n        ajf = load_mam_ajf(book)\n        alignments[book] = make_alignment(book, he_books[book], ajf)",1)
 
-          s = s.replace("        for r in starts+[maftir]:\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')", "        for r in starts + ([maftir] if maftir else []):\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')")
-          s = s.replace("        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')", "        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')")
-          s = s.replace("        'Aliyah source: Hebcal leyning',", "        'Aliyah source: Hebcal leyning, mapped through MAM-AJF character alignment',")
-          p.write_text(s, encoding='utf-8')
+          old="        starts=[parse_ref(fk[str(i)][0]) for i in range(1,8)]"
+          assert old in s
+          s=s.replace(old,"        ajf_starts=[parse_ref(fk[str(i)][0]) for i in range(1,8)]\n        starts=[map_ajf_start(book, r, alignments[book], f'{name} aliyah {i+1}') for i,r in enumerate(ajf_starts)]",1)
+
+          old="        end=parse_ref(fk['7'][1])"
+          assert old in s
+          s=s.replace(old,"        ajf_end=parse_ref(fk['7'][1])\n        end=map_ajf_end(book, ajf_end, alignments[book], f'{name} seventh aliyah end')",1)
+
+          old="        if not m_rng: raise RuntimeError(f'No Maftir for {name}')\n        maftir=parse_ref(m_rng[0])"
+          assert old in s
+          s=s.replace(old,"        maftir=map_ajf_start(book, parse_ref(m_rng[0]), alignments[book], f'{name} Maftir') if m_rng else None",1)
+
+          old="        for r in starts+[maftir]:\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')"
+          assert old in s
+          s=s.replace(old,"        for r in starts + ([maftir] if maftir else []):\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')",1)
+
+          old="        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')"
+          assert old in s
+          s=s.replace(old,"        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')",1)
+
+          s=s.replace("        'Aliyah source: Hebcal leyning',","        'Aliyah source: Hebcal leyning, mapped through MAM-AJF character alignment',",1)
+          p.write_text(s,encoding='utf-8')
           PY
 
       - name: Build and validate EPUB
