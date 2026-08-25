@@ -39,7 +39,9 @@ jobs:
 
           def make_alignment(book, sefaria, ajf):
               def canon(t):
-                  return re.sub(r'\s+', '', t)
+                  # AJF retains some explicit paseq separators that the Sefaria-format
+                  # MAM export treats as layout metadata. Ignore only whitespace and paseq.
+                  return re.sub(r'[\s\u05C0]+', '', t)
               s_order = sorted(sefaria)
               a_order = sorted(ajf)
               s_start = {}; s_end = {}; pos = 0; s_parts = []
