@@ -17,84 +17,11 @@ jobs:
           sudo apt-get install -y fonts-noto-core
           fc-match 'Noto Serif Hebrew'
 
-      - name: Use Sefaria-compatible PocketTorah aliyah boundaries
+      - name: Apply Sefaria-compatible aliyah data
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('build_torah_remote.py')
-          s=p.read_text(encoding='utf-8')
-          s=s.replace("HEBCAL_REPO = 'hebcal/hebcal-leyning'\nHEBCAL_REV = 'e6768f6cdd3d8d738315e88baf05b5c23adb3fc9'", "POCKET_REPO = 'rneiss/PocketTorah'\nPOCKET_REV = '8a23287221dd535966ee9914de9a03e71769a469'")
-
-          start=s.index("    aliyot=json.loads(download_text(raw_url(HEBCAL_REPO")
-          end=s.index("\n    total_verses=", start)
-          new='''    aliyot_data=json.loads(download_text(raw_url(POCKET_REPO, POCKET_REV, 'data/aliyah.json')))
-              raw_portions=aliyot_data['parshiot']['parsha']
-              portions=[]
-              for rec in raw_portions:
-                  try:
-                      num=int(rec['_num'])
-                  except (KeyError, TypeError, ValueError):
-                      continue
-                  if not (1 <= num <= 54):
-                      continue
-                  fk=rec.get('fullkriyah',{}).get('aliyah',[])
-                  byali={str(a.get('_num')): a for a in fk if isinstance(a,dict)}
-                  if not all(str(i) in byali for i in range(1,8)):
-                      raise RuntimeError(f"PocketTorah missing annual aliyot for {rec.get('_id')}")
-                  portions.append((num, rec['_id'], rec, byali))
-              bynum={num:(num,name,rec,byali) for num,name,rec,byali in portions}
-              if set(bynum) != set(range(1,55)):
-                  raise RuntimeError(f'PocketTorah annual parsha numbers found: {sorted(bynum)}')
-              portions=[bynum[i] for i in range(1,55)]
-
-              he_books={}; en_books={}; br_books={}; en_licenses={}
-              for book,_ in BOOKS:
-                  he_books[book], br_books[book]=load_mam(book)
-                  en_books[book], en_licenses[book]=load_metsudah(book)
-                  if set(he_books[book]) != set(en_books[book]):
-                      missing_en=sorted(set(he_books[book])-set(en_books[book]))[:10]
-                      missing_he=sorted(set(en_books[book])-set(he_books[book]))[:10]
-                      raise RuntimeError(f'Verse mismatch {book}; missing EN {missing_en}; missing HE {missing_he}')
-
-              # PocketTorah's annual reading data is in the same Sefaria-compatible
-              # Torah versification used by the MAM and Metsudah source files here.
-              last_end={}
-              parsha_data=[]
-              for num,name,rec,byali in portions:
-                  verse_desc=rec.get('_verse','')
-                  book=next((b for b,_ in BOOKS if verse_desc.startswith(b+' ')), None)
-                  if not book:
-                      raise RuntimeError(f'Cannot determine book for {name}: {verse_desc!r}')
-                  starts=[parse_ref(byali[str(i)]['_begin']) for i in range(1,8)]
-                  end=parse_ref(byali['7']['_end'])
-                  start=starts[0]
-                  # Vezot Haberakhah's Simchat Torah Maftir is a separate holiday
-                  # reading; holiday readings are intentionally excluded here.
-                  maftir=parse_ref(byali['M']['_begin']) if num != 54 and 'M' in byali else None
-                  ordered=sorted(he_books[book])
-                  idx={r:i for i,r in enumerate(ordered)}
-                  if start not in idx or end not in idx: raise RuntimeError(f'Bad parsha range {name}: {start}-{end}')
-                  if idx[start] > idx[end]: raise RuntimeError(f'Reversed parsha range {name}')
-                  refs=ordered[idx[start]:idx[end]+1]
-                  for r in starts + ([maftir] if maftir else []):
-                      if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')
-                  if book in last_end and idx[start] != idx[last_end[book]]+1:
-                      raise RuntimeError(f'Gap/overlap before {name}: prev {last_end[book]}, start {start}')
-                  if book not in last_end and idx[start] != 0:
-                      raise RuntimeError(f'{name} does not begin {book}')
-                  last_end[book]=end
-                  parsha_data.append((num,name,book,refs,starts,maftir))
-              for book,_ in BOOKS:
-                  if last_end.get(book) != sorted(he_books[book])[-1]:
-                      raise RuntimeError(f'Parsha coverage does not reach end of {book}')
-          '''
-          new='\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines())
-          s=s[:start]+new+s[end:]
-          s=s.replace('Aliyah and Maftir boundaries:</strong> Hebcal leyning data (BSD-2-Clause).', 'Aliyah and Maftir boundaries:</strong> PocketTorah annual-reading data, the same dataset referenced by Sefaria’s archived parsha-import tooling.')
-          s=s.replace("        'Aliyah source: Hebcal leyning',", "        'Aliyah source: PocketTorah annual-reading data in Sefaria-compatible versification',")
-          s=s.replace("        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')", "        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')")
-          p.write_text(s,encoding='utf-8')
-          PY
+          python3 -m py_compile patch_pocket.py
+          python3 patch_pocket.py
+          python3 -m py_compile build_torah_remote.py
 
       - name: Build and validate EPUB
         run: python3 build_torah_remote.py
