@@ -17,6 +17,18 @@ jobs:
           sudo apt-get install -y fonts-noto-core
           fc-match 'Noto Serif Hebrew'
 
+      - name: Apply Vezot Haberakhah Maftir edge-case fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build_torah_remote.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("        if not m_rng: raise RuntimeError(f'No Maftir for {name}')\n        maftir=parse_ref(m_rng[0])", "        maftir=parse_ref(m_rng[0]) if m_rng else None")
+          s = s.replace("        for r in starts+[maftir]:\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')", "        for r in starts + ([maftir] if maftir else []):\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')")
+          s = s.replace("        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')", "        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')")
+          p.write_text(s, encoding='utf-8')
+          PY
+
       - name: Build and validate EPUB
         run: python3 build_torah_remote.py
 
