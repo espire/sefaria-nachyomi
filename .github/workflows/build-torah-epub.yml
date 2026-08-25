@@ -17,99 +17,82 @@ jobs:
           sudo apt-get install -y fonts-noto-core
           fc-match 'Noto Serif Hebrew'
 
-      - name: Map Hebcal boundaries onto Sefaria versification
+      - name: Use Sefaria-compatible PocketTorah aliyah boundaries
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p=Path('build_torah_remote.py')
           s=p.read_text(encoding='utf-8')
+          s=s.replace("HEBCAL_REPO = 'hebcal/hebcal-leyning'\nHEBCAL_REV = 'e6768f6cdd3d8d738315e88baf05b5c23adb3fc9'", "POCKET_REPO = 'rneiss/PocketTorah'\nPOCKET_REV = '8a23287221dd535966ee9914de9a03e71769a469'")
 
-          anchor="def load_metsudah(book):"
-          insert=r'''def load_mam_ajf(book):
-              url = raw_url(MAM_REPO, MAM_REV, f'csv-ajf/{book}.csv')
-              text = download_text(url)
-              verses = {}
-              for row in csv.reader(io.StringIO(text)):
-                  if len(row) < 2: continue
-                  m = re.fullmatch(re.escape(book) + r' (\d+):(\d+)', row[0].strip())
-                  if not m: continue
-                  verses[(int(m.group(1)), int(m.group(2)))] = clean_mam(row[1])
-              if not verses: raise RuntimeError(f'No MAM-AJF verses parsed for {book}')
-              return verses
+          start=s.index("    aliyot=json.loads(download_text(raw_url(HEBCAL_REPO")
+          end=s.index("\n    total_verses=", start)
+          new='''    aliyot_data=json.loads(download_text(raw_url(POCKET_REPO, POCKET_REV, 'data/aliyah.json')))
+              raw_portions=aliyot_data['parshiot']['parsha']
+              portions=[]
+              for rec in raw_portions:
+                  try:
+                      num=int(rec['_num'])
+                  except (KeyError, TypeError, ValueError):
+                      continue
+                  if not (1 <= num <= 54):
+                      continue
+                  fk=rec.get('fullkriyah',{}).get('aliyah',[])
+                  byali={str(a.get('_num')): a for a in fk if isinstance(a,dict)}
+                  if not all(str(i) in byali for i in range(1,8)):
+                      raise RuntimeError(f"PocketTorah missing annual aliyot for {rec.get('_id')}")
+                  portions.append((num, rec['_id'], rec, byali))
+              bynum={num:(num,name,rec,byali) for num,name,rec,byali in portions}
+              if set(bynum) != set(range(1,55)):
+                  raise RuntimeError(f'PocketTorah annual parsha numbers found: {sorted(bynum)}')
+              portions=[bynum[i] for i in range(1,55)]
 
-          def make_alignment(book, sefaria, ajf):
-              def canon(t):
-                  # MAM's two exports may order ketiv/qere annotations differently,
-                  # and AJF may retain explicit paseq separators. Keep the pointed
-                  # reading text; ignore parenthetical ketiv metadata, whitespace,
-                  # and paseq solely for versification alignment.
-                  t = re.sub(r'\([^)]*\)', '', t)
-                  return re.sub(r'[\s\u05C0]+', '', t)
-              s_order = sorted(sefaria)
-              a_order = sorted(ajf)
-              s_start = {}; s_end = {}; pos = 0; s_parts = []
-              for ref in s_order:
-                  txt = canon(sefaria[ref]); s_start[pos] = ref; pos += len(txt); s_end[pos] = ref; s_parts.append(txt)
-              s_all = ''.join(s_parts)
-              a_spans = {}; pos = 0; a_parts = []
-              for ref in a_order:
-                  txt = canon(ajf[ref]); a_spans[ref] = (pos, pos + len(txt)); pos += len(txt); a_parts.append(txt)
-              a_all = ''.join(a_parts)
-              if s_all != a_all:
-                  lim = min(len(s_all), len(a_all)); i = next((i for i in range(lim) if s_all[i] != a_all[i]), lim)
-                  raise RuntimeError(f'MAM Sefaria/AJF text mismatch in {book} at char {i}: {s_all[i:i+30]!r} vs {a_all[i:i+30]!r}')
-              return a_spans, s_start, s_end
+              he_books={}; en_books={}; br_books={}; en_licenses={}
+              for book,_ in BOOKS:
+                  he_books[book], br_books[book]=load_mam(book)
+                  en_books[book], en_licenses[book]=load_metsudah(book)
+                  if set(he_books[book]) != set(en_books[book]):
+                      missing_en=sorted(set(he_books[book])-set(en_books[book]))[:10]
+                      missing_he=sorted(set(en_books[book])-set(he_books[book]))[:10]
+                      raise RuntimeError(f'Verse mismatch {book}; missing EN {missing_en}; missing HE {missing_he}')
 
-          def map_ajf_start(book, ref, alignment, context):
-              spans, starts, ends = alignment
-              if ref not in spans: raise RuntimeError(f'{context}: AJF ref not found {book} {ref}')
-              off = spans[ref][0]
-              if off not in starts:
-                  raise RuntimeError(f'{context}: leyning start {book} {ref} falls inside a Sefaria verse at char {off}')
-              return starts[off]
-
-          def map_ajf_end(book, ref, alignment, context):
-              spans, starts, ends = alignment
-              if ref not in spans: raise RuntimeError(f'{context}: AJF ref not found {book} {ref}')
-              off = spans[ref][1]
-              if off not in ends:
-                  raise RuntimeError(f'{context}: leyning end {book} {ref} falls inside a Sefaria verse at char {off}')
-              return ends[off]
-
+              # PocketTorah's annual reading data is in the same Sefaria-compatible
+              # Torah versification used by the MAM and Metsudah source files here.
+              last_end={}
+              parsha_data=[]
+              for num,name,rec,byali in portions:
+                  verse_desc=rec.get('_verse','')
+                  book=next((b for b,_ in BOOKS if verse_desc.startswith(b+' ')), None)
+                  if not book:
+                      raise RuntimeError(f'Cannot determine book for {name}: {verse_desc!r}')
+                  starts=[parse_ref(byali[str(i)]['_begin']) for i in range(1,8)]
+                  end=parse_ref(byali['7']['_end'])
+                  start=starts[0]
+                  # Vezot Haberakhah's Simchat Torah Maftir is a separate holiday
+                  # reading; holiday readings are intentionally excluded here.
+                  maftir=parse_ref(byali['M']['_begin']) if num != 54 and 'M' in byali else None
+                  ordered=sorted(he_books[book])
+                  idx={r:i for i,r in enumerate(ordered)}
+                  if start not in idx or end not in idx: raise RuntimeError(f'Bad parsha range {name}: {start}-{end}')
+                  if idx[start] > idx[end]: raise RuntimeError(f'Reversed parsha range {name}')
+                  refs=ordered[idx[start]:idx[end]+1]
+                  for r in starts + ([maftir] if maftir else []):
+                      if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')
+                  if book in last_end and idx[start] != idx[last_end[book]]+1:
+                      raise RuntimeError(f'Gap/overlap before {name}: prev {last_end[book]}, start {start}')
+                  if book not in last_end and idx[start] != 0:
+                      raise RuntimeError(f'{name} does not begin {book}')
+                  last_end[book]=end
+                  parsha_data.append((num,name,book,refs,starts,maftir))
+              for book,_ in BOOKS:
+                  if last_end.get(book) != sorted(he_books[book])[-1]:
+                      raise RuntimeError(f'Parsha coverage does not reach end of {book}')
           '''
-          insert='\n'.join(line[10:] if line.startswith('          ') else line for line in insert.splitlines())
-          assert anchor in s
-          s=s.replace(anchor,insert+anchor,1)
-
-          old="    he_books={}; en_books={}; br_books={}; en_licenses={}"
-          assert old in s
-          s=s.replace(old,"    he_books={}; en_books={}; br_books={}; en_licenses={}; alignments={}",1)
-
-          needle="            raise RuntimeError(f'Verse mismatch {book}; missing EN {missing_en}; missing HE {missing_he}')"
-          assert needle in s
-          s=s.replace(needle, needle+"\n        ajf = load_mam_ajf(book)\n        alignments[book] = make_alignment(book, he_books[book], ajf)",1)
-
-          old="        starts=[parse_ref(fk[str(i)][0]) for i in range(1,8)]"
-          assert old in s
-          s=s.replace(old,"        ajf_starts=[parse_ref(fk[str(i)][0]) for i in range(1,8)]\n        starts=[map_ajf_start(book, r, alignments[book], f'{name} aliyah {i+1}') for i,r in enumerate(ajf_starts)]",1)
-
-          old="        end=parse_ref(fk['7'][1])"
-          assert old in s
-          s=s.replace(old,"        ajf_end=parse_ref(fk['7'][1])\n        end=map_ajf_end(book, ajf_end, alignments[book], f'{name} seventh aliyah end')",1)
-
-          old="        if not m_rng: raise RuntimeError(f'No Maftir for {name}')\n        maftir=parse_ref(m_rng[0])"
-          assert old in s
-          s=s.replace(old,"        maftir=map_ajf_start(book, parse_ref(m_rng[0]), alignments[book], f'{name} Maftir') if m_rng else None",1)
-
-          old="        for r in starts+[maftir]:\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')"
-          assert old in s
-          s=s.replace(old,"        for r in starts + ([maftir] if maftir else []):\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')",1)
-
-          old="        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')"
-          assert old in s
-          s=s.replace(old,"        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')",1)
-
-          s=s.replace("        'Aliyah source: Hebcal leyning',","        'Aliyah source: Hebcal leyning, mapped through MAM-AJF character alignment',",1)
+          new='\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines())
+          s=s[:start]+new+s[end:]
+          s=s.replace('Aliyah and Maftir boundaries:</strong> Hebcal leyning data (BSD-2-Clause).', 'Aliyah and Maftir boundaries:</strong> PocketTorah annual-reading data, the same dataset referenced by Sefaria’s archived parsha-import tooling.')
+          s=s.replace("        'Aliyah source: Hebcal leyning',", "        'Aliyah source: PocketTorah annual-reading data in Sefaria-compatible versification',")
+          s=s.replace("        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')", "        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')")
           p.write_text(s,encoding='utf-8')
           PY
 
