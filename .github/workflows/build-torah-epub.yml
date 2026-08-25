@@ -1,15 +1,17 @@
 name: Build Torah EPUB
 
 on:
-  pull_request:
+  push:
     branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out build branch
+      - name: Check out isolated build branch
         uses: actions/checkout@v4
+        with:
+          ref: chatgpt-torah-build-20260824
 
       - name: Install Hebrew font
         run: |
