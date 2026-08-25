@@ -17,12 +17,21 @@ jobs:
           sudo apt-get install -y fonts-noto-core
           fc-match 'Noto Serif Hebrew'
 
-      - name: Apply Vezot Haberakhah Maftir edge-case fix
+      - name: Align source numbering and holiday Maftir edge case
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('build_torah_remote.py')
           s = p.read_text(encoding='utf-8')
+          # Use MAM's AJF/Jewish-verse-numbering export, which aligns with Hebcal leyning refs.
+          s = s.replace("f'csv/{book}.csv'", "f'csv-ajf/{book}.csv'")
+          # Metsudah/Sefaria combines Num. 25:19 + 26:1; split the first sentence losslessly.
+          needle = "    return verses, data.get('license','unknown')"
+          repl = '''    if book == 'Numbers':\n        original = verses[(26,1)]\n        first, sep, rest = original.partition('. ')\n        if not sep or 'after the plague' not in first.lower():\n            raise RuntimeError(f'Unexpected Metsudah Numbers 26:1 text: {original!r}')\n        verses[(25,19)] = first + '.'\n        verses[(26,1)] = rest\n    return verses, data.get('license','unknown')'''
+          if needle not in s:
+              raise SystemExit('Could not patch Metsudah numbering alignment')
+          s = s.replace(needle, repl)
+          # Vezot Haberakhah has no in-parsha Maftir; Simchat Torah Maftir is a separate holiday reading.
           s = s.replace("        if not m_rng: raise RuntimeError(f'No Maftir for {name}')\n        maftir=parse_ref(m_rng[0])", "        maftir=parse_ref(m_rng[0]) if m_rng else None")
           s = s.replace("        for r in starts+[maftir]:\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')", "        for r in starts + ([maftir] if maftir else []):\n            if r not in set(refs): raise RuntimeError(f'Boundary {r} outside {name}')")
           s = s.replace("        if joined.count('class=\"maftir\"') != 54*2: raise RuntimeError('Maftir marker count mismatch')", "        if joined.count('class=\"maftir\"') != 53*2: raise RuntimeError('Maftir marker count mismatch')")
